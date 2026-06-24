@@ -140,25 +140,39 @@ hr { border-color: #22223a; }
 
 APIFY_TOKEN = st.secrets.get("APIFY_TOKEN", "")
 
-def format_whatsapp_number(phone_str):
-    """Clean and format pakistani/international numbers for WhatsApp links securely."""
+def format_whatsapp_number(phone_str, country_choice):
+    """Clean and format phone numbers dynamically based on user's target country selection."""
     if not phone_str:
         return None
-    # Extract only numbers
+        
+    # Standard clean: pure digits extract karein
     clean_number = re.sub(r'\D', '', phone_str)
     
-    # Handle local Pakistani numbers
-    if clean_number.startswith('03') and len(clean_number) == 11:
-        clean_number = '92' + clean_number[1:]
-    elif clean_number.startswith('3') and len(clean_number) == 10:
-        clean_number = '92' + clean_number
-        
+    # 1. Agar number '+' ya standard format ke sath pehle se hi international hai
+    if phone_str.strip().startswith('+'):
+        return clean_number
+
+    # 2. Country specific local format processing
+    if country_choice == "Pakistan 🇵🇰":
+        if clean_number.startswith('03') and len(clean_number) == 11:
+            return '92' + clean_number[1:]
+        elif clean_number.startswith('3') and len(clean_number) == 10:
+            return '92' + clean_number
+            
+    elif country_choice == "Switzerland 🇨🇭":
+        if clean_number.startswith('0') and len(clean_number) == 10:
+            return '41' + clean_number[1:]
+            
+    elif country_choice == "United Arab Emirates 🇦🇪":
+        if clean_number.startswith('0') and len(clean_number) == 9:
+            return '971' + clean_number[1:]
+
+    # Agar koi filter match na ho par solid digits hon
     return clean_number if len(clean_number) >= 10 else None
 
 
 def run_apify_scraper(city: str, business_type: str, max_results: int = 20) -> list:
-    """Run Apify Google Maps scraper (Using your working actor)"""
-    # Restored your original working actor route
+    """Run Apify Google Maps scraper using your working original actor."""
     url = f"https://api.apify.com/v2/acts/compass~crawler-google-places/runs?token={APIFY_TOKEN}"
     
     payload = {
@@ -206,7 +220,6 @@ def filter_negative(businesses: list, max_rating: float) -> list:
         rating = b.get("totalScore") or b.get("rating") or 5
         if float(rating) <= max_rating:
             reviews = b.get("reviews", [])
-            # Target 1 and 2 stars for realistic management leads
             negative_reviews = [r for r in reviews if r.get("stars") in [1, 2]]
             if negative_reviews:
                 b["_oneStarReviews"] = negative_reviews
@@ -220,12 +233,15 @@ st.markdown('<div class="hero-title">ReviewRadar 🎯</div>', unsafe_allow_html=
 st.markdown('<div class="hero-sub">Find businesses with negative reviews — reach them instantly</div>', unsafe_allow_html=True)
 
 with st.container():
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
     with col1:
-        city = st.text_input("City", placeholder="e.g. Lahore, Karachi, Dubai")
+        city = st.text_input("City", placeholder="e.g. Zurich, Lahore, Dubai")
     with col2:
         biz_type = st.text_input("Business Type", placeholder="e.g. restaurants, salons, gyms")
     with col3:
+        # Dynamic country selection box for targeted parsing
+        country_select = st.selectbox("Target Country", ["Switzerland 🇨🇭", "Pakistan 🇵🇰", "United Arab Emirates 🇦🇪", "International / Other 🌍"])
+    with col4:
         max_rating = st.number_input("Max Rating", min_value=1.0, max_value=5.0, value=3.5, step=0.5)
 
 col_a, col_b = st.columns([1, 3])
@@ -265,13 +281,13 @@ if run_btn:
             email = biz.get("email", "") or biz.get("emailId", "")
             name = biz.get("title", "Unknown")
             
-            # Hybrid Outreach Check: Dono contact missing hain toh ignore
+            # Hybrid Outreach Check
             if not phone and not email:
                 continue
                 
-            wa_number = format_whatsapp_number(phone)
+            # Dynamic targeted country formatting call
+            wa_number = format_whatsapp_number(phone, country_select)
             
-            # Formulating rapid custom outreach message templates
             encoded_msg = urllib.parse.quote(f"Hi {name}, I noticed some negative reviews on your Google Maps profile. We can help you manage and clean fake reviews professionally. Let us know if you are interested!")
             wa_link = f"https://wa.me/{wa_number}?text={encoded_msg}" if wa_number else None
             mail_link = f"mailto:{email}?subject=Google Maps Review Management&body=Hi {name}," if email else None
@@ -291,7 +307,7 @@ if run_btn:
         progress.empty()
         
         if not leads:
-            st.warning("Businesses found but none had contact fields (Phone/Email).")
+            st.warning("Businesses found but none had valid contact fields (Phone/Email).")
             st.stop()
         
         # Stats Display
@@ -308,7 +324,6 @@ if run_btn:
         
         for lead in leads:
             with st.container():
-                # Conditional badges display depending on data presence
                 badges_html = ""
                 if lead['wa_link']:
                     badges_html += '<span class="wa-badge" style="margin-right: 5px;">✓ WhatsApp Ready</span>'
@@ -325,7 +340,7 @@ if run_btn:
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # Expandable negative feedback area
+                # Expandable reviews area
                 with st.expander(f"📋 View Negative Reviews ({len(lead['reviews'])})"):
                     for rev in lead["reviews"]:
                         st.markdown(f"""
@@ -335,7 +350,7 @@ if run_btn:
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        # Dynamic Image rendering direct from Apify datasets without Playwright
+                        # Dynamic Image rendering straight from JSON
                         imgs = rev.get("photos", []) or rev.get("images", []) or rev.get("reviewImageUrls", [])
                         if imgs:
                             img_cols = st.columns(min(len(imgs), 3))
@@ -345,7 +360,7 @@ if run_btn:
                                     with img_cols[idx]:
                                         st.image(img_url, width=180)
                 
-                # Direct Quick Action Action Columns
+                # Action Buttons
                 btn_col1, btn_col2 = st.columns(2)
                 with btn_col1:
                     if lead["wa_link"]:
