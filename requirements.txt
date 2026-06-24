@@ -1,4 +1,5 @@
 streamlit
-requests
+apify-client
 playwright
-Pillow
+chromium
+chromium-driver
