@@ -1,5 +1,3 @@
 streamlit
 apify-client
 playwright
-chromium
-chromium-driver
