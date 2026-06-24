@@ -1,36 +1,153 @@
 import streamlit as st
-from apify_client import ApifyClient
-import urllib.parse
+import requests
+import json
+import time
 import re
+import urllib.parse
+import base64
 
-# Page configuration
-st.set_page_config(page_title="ReviewRadar 🎯", page_icon="🎯", layout="wide")
+# ─── Page Config ───────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="ReviewRadar — Lead Finder",
+    page_icon="🎯",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-st.title("ReviewRadar — Lead Generation Tool 🎯")
-st.caption("Find businesses with negative reviews and instantly contact them.")
+# ─── Custom CSS ────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
-# Sidebar Inputs
-st.sidebar.header("Search Parameters")
-city = st.sidebar.text_input("City Name", value="Lahore")
-business_type = st.sidebar.text_input("Business Type", value="Restaurants")
-max_rating = st.sidebar.slider("Maximum Rating Filter", 1.0, 5.0, 3.5, step=0.1)
+* { font-family: 'Space Grotesk', sans-serif; }
 
-# Get API Token securely from Streamlit Secrets
-try:
-    apify_token = st.secrets["APIFY_TOKEN"]
-    client = ApifyClient(apify_token)
-except Exception:
-    st.error("❌ APIFY_TOKEN missing! Please add it in Streamlit Secrets.")
-    st.stop()
+.stApp {
+    background: #0a0a0f;
+    color: #e8e8f0;
+}
 
-# Helper function to clean and format pakistani/international numbers for WhatsApp
+/* Header */
+.hero-title {
+    font-size: 3rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #ff4d6d, #ff8800);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: -1px;
+    margin-bottom: 0.2rem;
+}
+.hero-sub {
+    color: #666680;
+    font-size: 1rem;
+    font-weight: 400;
+    margin-bottom: 2rem;
+}
+
+/* Lead card */
+.lead-card {
+    background: #13131f;
+    border: 1px solid #22223a;
+    border-radius: 14px;
+    padding: 1.4rem 1.6rem;
+    margin-bottom: 1rem;
+    transition: border-color 0.2s;
+}
+.lead-card:hover { border-color: #ff4d6d55; }
+.lead-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #ffffff;
+    margin-bottom: 0.2rem;
+}
+.lead-meta {
+    font-size: 0.82rem;
+    color: #55556e;
+    font-family: 'JetBrains Mono', monospace;
+    margin-bottom: 0.6rem;
+}
+.wa-badge {
+    display: inline-block;
+    background: #25D36622;
+    color: #25D366;
+    border: 1px solid #25D36644;
+    border-radius: 20px;
+    padding: 2px 12px;
+    font-size: 0.78rem;
+    font-weight: 500;
+}
+.review-box {
+    background: #0a0a0f;
+    border-left: 3px solid #ff4d6d;
+    border-radius: 0 8px 8px 0;
+    padding: 0.8rem 1rem;
+    margin-top: 0.8rem;
+    font-size: 0.88rem;
+    color: #aaaacc;
+    font-style: italic;
+}
+.star-row { color: #ff4d6d; font-size: 0.9rem; margin-bottom: 0.3rem; }
+
+/* Stats row */
+.stat-box {
+    background: #13131f;
+    border: 1px solid #22223a;
+    border-radius: 12px;
+    padding: 1rem;
+    text-align: center;
+}
+.stat-num { font-size: 2rem; font-weight: 700; color: #ff4d6d; }
+.stat-label { font-size: 0.78rem; color: #555570; margin-top: 0.1rem; }
+
+/* Button override */
+div.stButton > button {
+    background: linear-gradient(135deg, #ff4d6d, #ff8800);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    padding: 0.6rem 2rem;
+    font-weight: 600;
+    font-size: 1rem;
+    width: 100%;
+    transition: opacity 0.2s;
+}
+div.stButton > button:hover { opacity: 0.85; }
+
+/* Input overrides */
+.stTextInput > div > div > input,
+.stNumberInput > div > div > input,
+.stSelectbox > div > div {
+    background: #0a0a0f !important;
+    border: 1px solid #22223a !important;
+    color: #e8e8f0 !important;
+    border-radius: 8px !important;
+}
+
+/* Progress */
+.progress-msg {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    color: #666680;
+    margin: 0.3rem 0;
+}
+
+/* Divider */
+hr { border-color: #22223a; }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ─── Helpers ───────────────────────────────────────────────────────────────────
+
+APIFY_TOKEN = st.secrets.get("APIFY_TOKEN", "")
+
 def format_whatsapp_number(phone_str):
+    """Clean and format pakistani/international numbers for WhatsApp links securely."""
     if not phone_str:
         return None
-    # Sirf digits (numbers) extract karein
+    # Extract only numbers
     clean_number = re.sub(r'\D', '', phone_str)
     
-    # Agar number 03 se shuru ho raha hai (Local Pak number), toh 0 hata kar 92 lagayein
+    # Handle local Pakistani numbers
     if clean_number.startswith('03') and len(clean_number) == 11:
         clean_number = '92' + clean_number[1:]
     elif clean_number.startswith('3') and len(clean_number) == 10:
@@ -38,89 +155,208 @@ def format_whatsapp_number(phone_str):
         
     return clean_number if len(clean_number) >= 10 else None
 
-if st.sidebar.button("Start Finding Leads 🚀"):
-    search_query = f"{business_type} in {city}"
-    st.info(f"🔍 Searching for '{search_query}' via Apify...")
-    
-    with st.spinner("Fetching data from Google Maps..."):
-        try:
-            run_input = {
-                "searchQueries": [search_query],
-                "maxCrawledPlacesPerSearch": 20, # Checked numbers properly
-                "includeReviews": True,
-                "language": "en"
-            }
-            run = client.actor("komorand/google-maps-scraper").call(run_input=run_input)
-            dataset_items = list(client.dataset(run["defaultDatasetId"]).list_items().items)
-        except Exception as e:
-            st.error(f"Apify Fetch Error: {e}")
-            st.stop()
 
-    if not dataset_items:
-        st.warning("No businesses found for this search.")
-    else:
-        valid_leads_found = 0
+def run_apify_scraper(city: str, business_type: str, max_results: int = 20) -> list:
+    """Run Apify Google Maps scraper (Using your working actor)"""
+    # Restored your original working actor route
+    url = f"https://api.apify.com/v2/acts/compass~crawler-google-places/runs?token={APIFY_TOKEN}"
+    
+    payload = {
+        "searchStringsArray": [f"{business_type} in {city}"],
+        "maxCrawledPlaces": max_results,
+        "language": "en",
+        "maxReviews": 10,
+        "reviewsSort": "newest",
+        "scrapeReviewerName": True,
+        "scrapeReviewerId": False,
+        "scrapeReviewerUrl": False,
+        "scrapeReviewsPersonalData": False,
+        "includeImages": True,
+    }
+    
+    headers = {"Content-Type": "application/json"}
+    
+    try:
+        r = requests.post(url, json=payload, headers=headers, timeout=30)
+        run_id = r.json()["data"]["id"]
         
-        for item in dataset_items:
-            name = item.get("title", "N/A")
-            phone = item.get("phone", "")
-            email = item.get("email", "")
-            rating = item.get("totalScore", 5.0)
-            reviews = item.get("reviews", [])
+        status_url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={APIFY_TOKEN}"
+        for _ in range(60):
+            time.sleep(5)
+            status_r = requests.get(status_url).json()
+            status = status_r["data"]["status"]
+            if status == "SUCCEEDED":
+                break
+            elif status in ["FAILED", "ABORTED"]:
+                return []
+        
+        dataset_id = status_r["data"]["defaultDatasetId"]
+        data_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={APIFY_TOKEN}"
+        results = requests.get(data_url).json()
+        return results
+    except Exception as e:
+        st.error(f"Apify error: {e}")
+        return []
+
+
+def filter_negative(businesses: list, max_rating: float) -> list:
+    """Filter businesses with rating below threshold and having 1 or 2-star reviews."""
+    filtered = []
+    for b in businesses:
+        rating = b.get("totalScore") or b.get("rating") or 5
+        if float(rating) <= max_rating:
+            reviews = b.get("reviews", [])
+            # Target 1 and 2 stars for realistic management leads
+            negative_reviews = [r for r in reviews if r.get("stars") in [1, 2]]
+            if negative_reviews:
+                b["_oneStarReviews"] = negative_reviews
+                filtered.append(b)
+    return filtered
+
+
+# ─── UI ────────────────────────────────────────────────────────────────────────
+
+st.markdown('<div class="hero-title">ReviewRadar 🎯</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero-sub">Find businesses with negative reviews — reach them instantly</div>', unsafe_allow_html=True)
+
+with st.container():
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        city = st.text_input("City", placeholder="e.g. Lahore, Karachi, Dubai")
+    with col2:
+        biz_type = st.text_input("Business Type", placeholder="e.g. restaurants, salons, gyms")
+    with col3:
+        max_rating = st.number_input("Max Rating", min_value=1.0, max_value=5.0, value=3.5, step=0.5)
+
+col_a, col_b = st.columns([1, 3])
+with col_a:
+    max_results = st.selectbox("Scan how many?", [10, 20, 30, 50], index=1)
+
+st.markdown("---")
+
+run_btn = st.button("🔍 Find Leads")
+
+if run_btn:
+    if not city or not biz_type:
+        st.warning("Please enter city and business type.")
+    elif not APIFY_TOKEN:
+        st.error("Add APIFY_TOKEN in Streamlit Secrets.")
+    else:
+        progress = st.empty()
+        progress.markdown('<div class="progress-msg">⟳ Scanning Google Maps via Apify...</div>', unsafe_allow_html=True)
+        
+        businesses = run_apify_scraper(city, biz_type, max_results)
+        
+        if not businesses:
+            st.error("No data returned. Check Apify token or try again.")
+            st.stop()
+        
+        progress.markdown('<div class="progress-msg">⟳ Filtering negative reviews...</div>', unsafe_allow_html=True)
+        negatives = filter_negative(businesses, max_rating)
+        
+        if not negatives:
+            st.warning("No businesses found with low ratings and bad reviews.")
+            st.stop()
+        
+        leads = []
+        
+        for biz in negatives:
+            phone = biz.get("phone", "")
+            email = biz.get("email", "") or biz.get("emailId", "")
+            name = biz.get("title", "Unknown")
             
-            # Agar na phone hai na email, toh skip karein
+            # Hybrid Outreach Check: Dono contact missing hain toh ignore
             if not phone and not email:
                 continue
                 
-            # Filter by rating
-            if rating > max_rating:
-                continue
-
-            # Check for negative reviews (1 or 2 stars)
-            negative_reviews = [r for r in reviews if r.get("stars") in [1, 2]]
-            if not negative_reviews:
-                continue 
-
-            # Format phone for WhatsApp
             wa_number = format_whatsapp_number(phone)
             
-            valid_leads_found += 1
-
-            # Display Lead
+            # Formulating rapid custom outreach message templates
+            encoded_msg = urllib.parse.quote(f"Hi {name}, I noticed some negative reviews on your Google Maps profile. We can help you manage and clean fake reviews professionally. Let us know if you are interested!")
+            wa_link = f"https://wa.me/{wa_number}?text={encoded_msg}" if wa_number else None
+            mail_link = f"mailto:{email}?subject=Google Maps Review Management&body=Hi {name}," if email else None
+            
+            leads.append({
+                "name": name,
+                "phone": phone,
+                "email": email,
+                "address": biz.get("address", "N/A"),
+                "rating": biz.get("totalScore") or biz.get("rating") or "?",
+                "website": biz.get("website", ""),
+                "reviews": biz["_oneStarReviews"][:3],
+                "wa_link": wa_link,
+                "mail_link": mail_link
+            })
+        
+        progress.empty()
+        
+        if not leads:
+            st.warning("Businesses found but none had contact fields (Phone/Email).")
+            st.stop()
+        
+        # Stats Display
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            st.markdown(f'<div class="stat-box"><div class="stat-num">{len(businesses)}</div><div class="stat-label">Businesses Scanned</div></div>', unsafe_allow_html=True)
+        with s2:
+            st.markdown(f'<div class="stat-box"><div class="stat-num">{len(negatives)}</div><div class="stat-label">Low Rating Found</div></div>', unsafe_allow_html=True)
+        with s3:
+            st.markdown(f'<div class="stat-box"><div class="stat-num">{len(leads)}</div><div class="stat-label">Active Leads Generated</div></div>', unsafe_allow_html=True)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("### ✅ Your Leads")
+        
+        for lead in leads:
             with st.container():
-                st.markdown("---")
-                col1, col2 = st.columns([2, 1])
+                # Conditional badges display depending on data presence
+                badges_html = ""
+                if lead['wa_link']:
+                    badges_html += '<span class="wa-badge" style="margin-right: 5px;">✓ WhatsApp Ready</span>'
+                if lead['email']:
+                    badges_html += '<span class="wa-badge" style="background:#00b4d822; color:#00b4d8; border:1px solid #00b4d844;">✓ Email Available</span>'
                 
-                with col1:
-                    st.subheader(f"🏢 {name}")
-                    st.write(f"⭐️ **Rating:** {rating} / 5.0")
-                    if phone: st.write(f"📞 **Phone:** {phone} (Formatted: `{wa_number}`)")
-                    if email: st.write(f"📧 **Email:** {email}")
+                st.markdown(f"""
+                <div class="lead-card">
+                    <div class="lead-name">{lead['name']}</div>
+                    <div class="lead-meta">📍 {lead['address']} &nbsp;|&nbsp; ⭐ {lead['rating']}</div>
+                    <div style="font-size:0.85rem; color:#aaaacc; margin-bottom:8px;">📞 Phone: {lead['phone'] if lead['phone'] else 'N/A'} &nbsp;|&nbsp; 📧 Email: {lead['email'] if lead['email'] else 'N/A'}</div>
+                    {badges_html}
+                    {'<br><small style="color:#555570; margin-top:5px; display:block;">🌐 ' + lead['website'] + '</small>' if lead['website'] else ''}
+                </div>
+                """, unsafe_allow_html=True)
                 
-                with col2:
-                    st.markdown("### ⚡ Quick Outreach")
-                    if wa_number:
-                        encoded_msg = urllib.parse.quote(f"Hi {name}, I noticed some negative reviews on your Google Maps profile. We can help you manage and remove fake reviews professionally. Let us know if you are interested!")
-                        wa_link = f"https://wa.me/{wa_number}?text={encoded_msg}"
-                        st.markdown(f"[💬 Open WhatsApp Chat]({wa_link})")
+                # Expandable negative feedback area
+                with st.expander(f"📋 View Negative Reviews ({len(lead['reviews'])})"):
+                    for rev in lead["reviews"]:
+                        st.markdown(f"""
+                        <div class="review-box">
+                            <div class="star-row">★☆☆☆☆ — {rev.get('reviewer', {}).get('name', 'Anonymous')}</div>
+                            "{rev.get('text', 'No text comment left.')}"
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Dynamic Image rendering direct from Apify datasets without Playwright
+                        imgs = rev.get("photos", []) or rev.get("images", []) or rev.get("reviewImageUrls", [])
+                        if imgs:
+                            img_cols = st.columns(min(len(imgs), 3))
+                            for idx, img in enumerate(imgs[:3]):
+                                img_url = img if isinstance(img, str) else (img.get("imageUrl") or img.get("url", ""))
+                                if img_url:
+                                    with img_cols[idx]:
+                                        st.image(img_url, width=180)
+                
+                # Direct Quick Action Action Columns
+                btn_col1, btn_col2 = st.columns(2)
+                with btn_col1:
+                    if lead["wa_link"]:
+                        st.link_button(f"💬 WhatsApp {lead['name']}", lead["wa_link"])
                     else:
-                        st.caption("⚠️ No valid WhatsApp number format")
-                    
-                    if email:
-                        mail_link = f"mailto:{email}?subject=Google Maps Review Management&body=Hi {name},"
-                        st.markdown(f"[✉️ Send Email Directly]({mail_link})")
-
-                # Show negative reviews
-                st.markdown("**🚨 Negative Feedback:**")
-                for rev in negative_reviews[:2]:
-                    text_content = rev.get("text", "No text comment left.")
-                    st.error(f"💬 \"{text_content}\" — {rev.get('stars')} ⭐️")
-                    
-                    review_images = rev.get("reviewImageUrls", [])
-                    if review_images:
-                        st.image(review_images[0], caption="Attached Review Image", width=300)
-
-        if valid_leads_found == 0:
-            st.info("💡 Filter criteria matched 0 businesses. Try increasing 'Maximum Rating Filter' or searching a different area.")
-        else:
-            st.success(f"🎯 Displayed {valid_leads_found} potential leads successfully!")
+                        st.button(f"❌ No WhatsApp Available", disabled=True, key=f"no_wa_{lead['name']}")
+                        
+                with btn_col2:
+                    if lead["mail_link"]:
+                        st.link_button(f"✉️ Email {lead['name']}", lead["mail_link"])
+                    else:
+                        st.button(f"❌ No Email Available", disabled=True, key=f"no_mail_{lead['name']}")
+                        
+                st.markdown("---")
