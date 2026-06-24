@@ -1,9 +1,14 @@
 def run_apify_scraper(city: str, business_type: str, max_results: int = 20) -> list:
-    """Run Apify Google Maps scraper using your working original actor with safety checks."""
-    url = f"https://api.apify.com/v2/acts/compass~crawler-google-places/runs?token={APIFY_TOKEN}"
+    """Run Apify Google Maps scraper using the reliable official ApifyClient."""
+    from apify_client import ApifyClient
     
-    payload = {
-        "searchStringsArray": [f"{business_type} in {city}"],
+    # Initialize the client securely
+    client = ApifyClient(APIFY_TOKEN)
+    search_query = f"{business_type} in {city}"
+    
+    # Actor configuration exactly matching your working actor
+    run_input = {
+        "searchStringsArray": [search_query],
         "maxCrawledPlaces": max_results,
         "language": "en",
         "maxReviews": 10,
@@ -15,34 +20,22 @@ def run_apify_scraper(city: str, business_type: str, max_results: int = 20) -> l
         "includeImages": True,
     }
     
-    headers = {"Content-Type": "application/json"}
-    
     try:
-        r = requests.post(url, json=payload, headers=headers, timeout=30)
-        response_json = r.json()
+        # Live status check on screen
+        status_placeholder = st.empty()
+        status_placeholder.markdown('<div class="progress-msg">⏳ Sending request to Apify Cloud...</div>', unsafe_allow_html=True)
         
-        # Check if 'data' is present in response
-        if "data" not in response_json:
-            st.error(f"❌ Apify Authentication/Actor Error: {response_json.get('message', response_json)}")
-            return []
-            
-        run_id = response_json["data"]["id"]
+        # Start the actor run via official client
+        run = client.actor("compass~crawler-google-places").call(run_input=run_input)
         
-        status_url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={APIFY_TOKEN}"
-        for _ in range(60):
-            time.sleep(5)
-            status_r = requests.get(status_url).json()
-            status = status_r["data"]["status"]
-            if status == "SUCCEEDED":
-                break
-            elif status in ["FAILED", "ABORTED"]:
-                st.error(f"❌ Actor Run {status} on Apify Cloud.")
-                return []
+        status_placeholder.markdown('<div class="progress-msg">🚀 Fetching extracted dataset items...</div>', unsafe_allow_html=True)
         
-        dataset_id = status_r["data"]["defaultDatasetId"]
-        data_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={APIFY_TOKEN}"
-        results = requests.get(data_url).json()
-        return results
+        # Fetch data items directly from the resulting dataset
+        dataset_items = list(client.dataset(run["defaultDatasetId"]).list_items().items)
+        
+        status_placeholder.empty() # Clear tracking text once done
+        return dataset_items
+        
     except Exception as e:
-        st.error(f"Apify Connection Error: {e}")
+        st.error(f"❌ Apify Client Execution Error: {e}")
         return []
